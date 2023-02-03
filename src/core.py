@@ -2,8 +2,10 @@ from __future__ import annotations
 from typing import List, Optional, Dict
 from dataclasses import dataclass
 from enum import Enum
-from datetime import time
+from datetime import time, timezone, timedelta
 import re
+
+PST = timezone(timedelta(hours=-8))
 
 MEETING_RGX = re.compile(
     r'(?P<days>\w+) (?P<start>\d\d:\d\d) (?P<start_meridiem>\w\w) to (?P<end>\d\d:\d\d) (?P<end_meridiem>\w\w)')
@@ -17,6 +19,19 @@ class Weekday(Enum):
     Fri = 4
     Sat = 5
     Sun = 6
+
+    @property
+    def ics_name(self) -> str:
+        mappings = {
+            Weekday.Mon: 'MO',
+            Weekday.Tues: 'TU',
+            Weekday.Wed: 'WE',
+            Weekday.Thurs: 'TH',
+            Weekday.Fri: 'FR',
+            Weekday.Sat: 'SA',
+            Weekday.Sun: 'SU',
+        }
+        return mappings[self]
 
     @classmethod
     def from_letter(cls, letter: str) -> Weekday:
@@ -41,6 +56,15 @@ class Meetings:
     days: List[Weekday]
     start: time
     end: time
+    TIMEZONE = PST
+
+    @classmethod
+    def parse_time(cls, t: str, meridiem: str) -> time:
+        hour, min = [int(i) for i in t.split(':')]
+        if meridiem == 'PM':
+            if hour != 12:
+                hour += 12
+        return time(hour, min, tzinfo=cls.TIMEZONE)
 
     @classmethod
     def from_string(cls, meetings: str) -> Meetings:
@@ -48,21 +72,28 @@ class Meetings:
             return None
         else:
             matches = MEETING_RGX.match(meetings)
-            days = Weekday.from_letters(matches.group('days'))
-            start = time.fromisoformat(matches.group('start'))
-            end = time.fromisoformat(matches.group('end'))
+            groups = ["start", "start_meridiem", "end", "end_meridiem", "days"]
+            st, st_m, e, e_m, day_chars = [matches.group(i) for i in groups]
+            days = Weekday.from_letters(day_chars)
+
+            # def parse_time_match(side: str) -> time:
+            #     return time.fromisoformat(matches.group(side)).replace(tzinfo=PST)
+            # start = parse_time_match('start')
+            # end = parse_time_match('end')
+            start = cls.parse_time(st, st_m)
+            end = cls.parse_time(e, e_m)
             return Meetings(days, start, end)
 
 
 @dataclass
 class Professor:
-    professors_name: str
+    name: str
     email: str
     office_location: Optional[str] = None
     office_phone: Optional[str] = None
 
     MAPPINGS = {
-        "Professor's name": "professors_name",
+        "Professor's name": "name",
         "Email": "email",
         "Office Phone": "office_phone",
         "Office Location": "office_location",
@@ -100,13 +131,20 @@ class Professor:
             df = pandas.read_csv(path)
         return df
 
-    def position(self, faculty):
+    def position(self, faculty) -> str:
         res = faculty[faculty.NAME.str.contains(
-            self.professors_name, case=False)]
+            self.name, case=False)]
         if res.empty:
             return None
         else:
             return res.iloc[0].POSITION
+
+    def ics_summary(self, faculty=None) -> str:
+        pos = self.position(faculty) if faculty is not None else ""
+        return f"""Professor: {self.name} {pos}
+Email: {self.email}
+Office: {self.office_location}
+"""
 
 
 @dataclass
@@ -118,3 +156,14 @@ class Course:
     title: Optional[str] = None
     units: Optional[int] = None
     room: Optional[str] = None
+
+    def description(self, faculty=None):
+        room = f": {self.room}" if self.room else ""
+        return f"""{self.dscr}
+
+{self.prof.ics_summary(faculty)}
+"""
+
+    @property
+    def meets(self) -> bool:
+        return self.meetings is not None

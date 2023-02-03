@@ -101,11 +101,13 @@ class Professor:
         return df
 
     def position(self, faculty):
-        res = faculty[faculty.NAME.str.contains(self.professors_name, case=False)]
+        res = faculty[faculty.NAME.str.contains(
+            self.professors_name, case=False)]
         if res.empty:
             return None
         else:
             return res.iloc[0].POSITION
+
 
 @dataclass
 class Course:
@@ -113,4 +115,6 @@ class Course:
     name: str
     dscr: str
     prof: Dict
+    title: Optional[str] = None
     units: Optional[int] = None
+    room: Optional[str] = None

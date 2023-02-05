@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 my_classes.html
 calendar.ics
+build.sh

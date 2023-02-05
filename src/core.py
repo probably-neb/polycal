@@ -1,14 +1,17 @@
 from __future__ import annotations
-from typing import List, Optional, Dict
-from dataclasses import dataclass
+from typing import List, Optional, Dict, Tuple
+import pandas
+from dataclasses import dataclass, field
 from enum import Enum
-from datetime import time, timezone, timedelta
+from datetime import time, timezone, timedelta, date, datetime
 import re
 
-PST = timezone(timedelta(hours=-8))
+PST = timezone(timedelta(hours=-8), name="America/Los_Angeles")
 
 MEETING_RGX = re.compile(
     r'(?P<days>\w+) (?P<start>\d\d:\d\d) (?P<start_meridiem>\w\w) to (?P<end>\d\d:\d\d) (?P<end_meridiem>\w\w)')
+
+TERM_RGX = re.compile(r'(?P<term>\w+) TERM (?P<year>\d\d\d\d)')
 
 
 class Weekday(Enum):
@@ -52,6 +55,43 @@ class Weekday(Enum):
 
 
 @dataclass
+class Quarter:
+    year: int
+    term: str
+    data: pandas.DataFrame = field(repr=False)
+
+    @property
+    def first_day_of_classes(self):
+        start_date = self.data[self.data.DSCR.str.contains(
+            "classes begin")].iloc[0].DATE
+        start = self.parse_date(start_date)
+        return start
+
+    @property
+    def last_day_of_classes(self):
+        end_date = self.data[self.data.DSCR.str.contains(
+            "Last day of classes")].iloc[0].DATE
+        end = self.parse_date(end_date)
+        return end
+
+    @property
+    def classes_dates(self) -> Tuple[date, date]:
+        return self.first_day_of_classes, self.last_day_of_classes
+
+    def parse_date(self, date_str: str) -> date:
+        return datetime.strptime(date_str, '%B %d').date().replace(year=self.year)
+
+    @classmethod
+    def from_html(cls, caption: str, html: str) -> Quarter:
+        data = pandas.read_html(html)[0]
+        data.columns = ["DATE", "DAY", "DSCR"]
+        info = TERM_RGX.match(caption.strip())
+        term = info.group('term').lower()
+        year = int(info.group('year'))
+        return Quarter(term=term, data=data, year=year)
+
+
+@dataclass
 class Meetings:
     days: List[Weekday]
     start: time
@@ -64,7 +104,12 @@ class Meetings:
         if meridiem == 'PM':
             if hour != 12:
                 hour += 12
-        return time(hour, min, tzinfo=cls.TIMEZONE)
+        old = time(hour, min, tzinfo=PST)
+        t_str = f'{t} {meridiem}'
+        new = datetime.strptime(t_str, '%I:%M %p').time().replace(tzinfo=PST)
+        assert old == new
+        return new
+        # return
 
     @classmethod
     def from_string(cls, meetings: str) -> Meetings:
@@ -76,10 +121,6 @@ class Meetings:
             st, st_m, e, e_m, day_chars = [matches.group(i) for i in groups]
             days = Weekday.from_letters(day_chars)
 
-            # def parse_time_match(side: str) -> time:
-            #     return time.fromisoformat(matches.group(side)).replace(tzinfo=PST)
-            # start = parse_time_match('start')
-            # end = parse_time_match('end')
             start = cls.parse_time(st, st_m)
             end = cls.parse_time(e, e_m)
             return Meetings(days, start, end)
@@ -111,7 +152,6 @@ class Professor:
 
     @classmethod
     def get_updated_faculty(cls):
-        import pandas
         import requests
         url = "https://catalog.calpoly.edu/facultyandstaff/#facultystaffemeritustext"
         page = requests.get(url)
@@ -122,7 +162,6 @@ class Professor:
     @classmethod
     def get_faculty_df(cls):
         import pathlib
-        import pandas
         path = pathlib.Path(__file__).parent.parent / "faculty.csv"
         if not path.exists():
             df = Professor.get_updated_faculty()
@@ -153,17 +192,17 @@ class Course:
     name: str
     dscr: str
     prof: Dict
+    quarter: Quarter
     title: Optional[str] = None
     units: Optional[int] = None
     room: Optional[str] = None
 
     def description(self, faculty=None):
-        room = f": {self.room}" if self.room else ""
         return f"""{self.dscr}
 
 {self.prof.ics_summary(faculty)}
 """
 
     @property
-    def meets(self) -> bool:
+    def has_meetings(self) -> bool:
         return self.meetings is not None
